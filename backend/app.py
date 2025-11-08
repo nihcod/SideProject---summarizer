@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import List
 
 import requests
@@ -11,7 +12,7 @@ from backend.config import settings
 from backend.services.perplexity_client import PerplexityClient
 from backend.services.search_service import research_by_keywords
 from backend.services.url_service import summarize_url
-from backend.services.wiki_service import force_summary, summarize_keyword
+from backend.services.wiki_service import force_summary, original_link, summarize_keyword
 
 
 logger = logging.getLogger(__name__)
@@ -21,21 +22,29 @@ def create_app() -> Flask:
     app = Flask(__name__)
     CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-    try:
-        app.config["perplexity_client"] = PerplexityClient(
-            api_key=settings.perplexity_api_key,
-            model=settings.perplexity_model,
-            temperature=settings.perplexity_temperature,
-            timeout=settings.request_timeout,
-        )
-    except ValueError as exc:
-        logger.warning("Perplexity 클라이언트 초기화 실패: %s", exc)
-        app.config["perplexity_client"] = None
+    perplexity_error = None
+    client = None
+    if settings.perplexity_enabled:
+        try:
+            client = PerplexityClient(
+                api_key=settings.perplexity_api_key,
+                model=settings.perplexity_model,
+                temperature=settings.perplexity_temperature,
+                timeout=settings.request_timeout,
+            )
+        except ValueError as exc:
+            perplexity_error = str(exc)
+            logger.warning("Perplexity 클라이언트 초기화 실패: %s", exc)
+    else:
+        perplexity_error = "; ".join(settings.validation_errors)
+
+    app.config["perplexity_client"] = client
+    app.config["perplexity_error"] = perplexity_error
 
     @app.get("/health")
     def health() -> tuple:
         client_ready = app.config["perplexity_client"] is not None
-        return jsonify({"status": "ok", "perplexity": client_ready})
+        return jsonify({"status": "ok", "perplexity": client_ready, "detail": app.config.get("perplexity_error")})
 
     @app.post("/api/summarize-url")
     def api_summarize_url():
@@ -44,10 +53,8 @@ def create_app() -> Flask:
         if not url:
             return jsonify({"error": "URL을 입력해 주세요."}), 400
         client = app.config.get("perplexity_client")
-        if client is None:
-            return jsonify({"error": "Perplexity API 키가 설정되지 않았습니다."}), 500
         try:
-            _, payload = summarize_url(url, client)
+            _, payload = summarize_url(url, client, app.config.get("perplexity_error"))
             return jsonify(payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -65,7 +72,7 @@ def create_app() -> Flask:
         if not term:
             return jsonify({"message": "검색어를 입력해 주세요."}), 400
         result = summarize_keyword(term, lang=lang)
-        return jsonify(result)
+        return jsonify(_normalize_wiki_response(result, term, lang))
 
     @app.get("/api/wiki/force")
     def api_wiki_force():
@@ -73,29 +80,26 @@ def create_app() -> Flask:
         lang = request.args.get("lang", "ko")
         if not term:
             return jsonify({"message": "검색어를 입력해 주세요."}), 400
-        result = force_summary(term, lang=lang)
-        return jsonify(result)
+        summary, url = force_summary(term, lang=lang)
+        return jsonify(
+            {
+                "summary": summary,
+                "url": url,
+                "options": None,
+                "message": None if url else "다른 키워드를 시도해 주세요.",
+            }
+        )
 
     @app.post("/api/resources/search")
     def api_resource_search():
         data = request.get_json(force=True, silent=True) or {}
-        raw_keywords = data.get("keywords") or ""
-        keywords: List[str]
-        if isinstance(raw_keywords, str):
-            keywords = [kw.strip() for kw in raw_keywords.split(",")]
-        elif isinstance(raw_keywords, list):
-            keywords = [str(kw).strip() for kw in raw_keywords]
-        else:
-            keywords = []
-        keywords = [kw for kw in keywords if kw]
+        keywords = normalize_keywords(data.get("keywords"))
         if not keywords:
             return jsonify({"error": "최소 한 개의 키워드를 입력해 주세요."}), 400
         client = app.config.get("perplexity_client")
-        if client is None:
-            return jsonify({"error": "API 키가 설정되지 않았습니다."}), 500
         try:
-            resources = research_by_keywords(keywords, client)
-            return jsonify({"results": resources})
+            resources, meta = research_by_keywords(keywords, client, app.config.get("perplexity_error"))
+            return jsonify({"results": resources, **meta})
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:  # pylint: disable=broad-except
@@ -103,6 +107,58 @@ def create_app() -> Flask:
             return jsonify({"error": "자료를 불러오지 못했습니다.", "detail": str(exc)}), 500
 
     return app
+
+
+KEYWORD_SANITIZER = re.compile(r"[^0-9A-Za-z가-힣#\+\-\s]")
+
+
+def normalize_keywords(raw_keywords) -> List[str]:
+    tokens: List[str] = []
+    if isinstance(raw_keywords, str):
+        raw_items = raw_keywords.split(",")
+    elif isinstance(raw_keywords, list):
+        raw_items = raw_keywords
+    else:
+        raw_items = []
+
+    for item in raw_items:
+        token = str(item).strip()
+        if not token:
+            continue
+        tokens.append(token)
+
+    cleaned = []
+    for token in tokens:
+        normalized = KEYWORD_SANITIZER.sub(" ", token)
+        normalized = " ".join(normalized.split())
+        normalized = normalized.strip(" ,;/")
+        if normalized:
+            cleaned.append(normalized)
+    return cleaned
+
+
+def _normalize_wiki_response(result, keyword: str, lang: str) -> dict:
+    if isinstance(result, dict) and result.get("disambiguation"):
+        return {
+            "summary": None,
+            "url": None,
+            "options": result.get("options", []),
+            "message": result.get("message", "검색어가 모호합니다."),
+        }
+
+    summary = result if isinstance(result, str) else None
+    url = None
+    message = None
+    if summary and not summary.startswith("검색 결과") and not summary.startswith("알 수"):
+        try:
+            url = original_link(keyword, lang)
+        except Exception:
+            url = None
+    else:
+        message = summary
+        summary = None
+
+    return {"summary": summary, "url": url, "options": None, "message": message}
 
 
 app = create_app()

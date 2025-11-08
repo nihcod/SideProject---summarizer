@@ -30,25 +30,42 @@ project/
 └── README.md
 ```
 
-## 환경 변수
-`.env.example`을 복사해 `.env`를 만든 뒤 값을 채워주세요.
+## 환경 변수 & 준비 단계
+1. 예제 파일을 복사합니다.
+   ```bash
+   cp .env.example .env
+   ```
+2. `.env`를 열어 **Perplexity API 키**와 사용할 모델명을 입력합니다.
+   - `PERPLEXITY_API_KEY=pk-...` (Perplexity 대시보드에서 발급)
+   - `PERPLEXITY_MODEL=llama-3-sonar-small-128k-chat` (문서에 명시된 지원 모델 중 하나)
+   - `PERPLEXITY_TEMPERATURE`와 `BACKEND_PORT`는 필요에 따라 조정합니다.
+3. `.env` 파일은 절대 커밋/배포하지 마세요. (Git에 추가하지 말고, CI/CD에서는 환경변수로 주입)
 
-| 변수 | 설명 |
-| --- | --- |
-| `PERPLEXITY_API_KEY` | Perplexity에서 발급받은 API 키 |
-| `PERPLEXITY_MODEL` | 기본 `llama-3.1-sonar-small-128k-chat` |
-| `PERPLEXITY_TEMPERATURE` | 응답 다양성 제어 (기본 0.2) |
-| `BACKEND_PORT` | Flask 서버 포트 (기본 8000) |
+## 설치 및 실행 방법
+### 1) 백엔드(Flask)
+필요한 파이썬 모듈(버전은 `requirements.txt` 참고):
 
-## 백엔드 실행
+- Flask / Flask-Cors
+- python-dotenv
+- requests / beautifulsoup4 / wikipedia
+
 ```bash
 cd project
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # 값 수정
 python run_backend.py  # 또는 python -m backend.app
 ```
+
+### 2) 프런트엔드(Vite + React)
+```bash
+cd project/frontend
+npm install
+npm run dev -- --host
+```
+- 개발 서버: <http://localhost:5173>
+- API 기본 주소는 `http://localhost:8000`. 변경하려면 `frontend/.env`에 `VITE_API_BASE_URL`을 지정하세요.
+- Node 18+ 권장 (Vite 5, @vitejs/plugin-react가 요구)
 
 ### 주요 API
 | Method & Path | 설명 |

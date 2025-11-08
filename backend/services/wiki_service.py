@@ -1,81 +1,103 @@
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import wikipedia
 
 
-def summarize_keyword(keyword: str, lang: str = "ko", max_sentences: int = 5) -> dict:
+PREFERRED_KEYWORDS = {
+    "배": ["과일", "fruit", "나무", "식물", "선박", "동음이의어"],
+}
+
+
+def summarize_keyword(keyword: str, lang: str = "ko", max_sentences: int = 8) -> dict | str:
     wikipedia.set_lang(lang)
     try:
-        summary = wikipedia.summary(keyword, sentences=max_sentences)
-        page = wikipedia.page(keyword, auto_suggest=False)
-        return {
-            "summary": summary,
-            "url": page.url,
-            "options": [],
-            "message": None,
-        }
-    except wikipedia.exceptions.DisambiguationError as exc:
-        options = exc.options[:5]
-        return _build_result(message="검색어가 모호합니다. 아래 후보 중 선택해 주세요.", options=options)
+        summary = wikipedia.summary(keyword, sentences=max_sentences, auto_suggest=False)
+        return summary
+    except wikipedia.exceptions.DisambiguationError:
+        summary, _ = force_summary(keyword, lang, max_sentences)
+        return summary
     except wikipedia.exceptions.PageError:
-        return _build_result(message="해당 검색어에 대한 문서를 찾지 못했습니다.")
+        return "검색 결과가 없습니다."
     except Exception as exc:  # pylint: disable=broad-except
-        return _build_result(message=f"알 수 없는 오류가 발생했습니다: {exc}")
+        return f"알 수 없는 오류가 발생 하였습니다.: {exc}"
 
 
-def force_summary(keyword: str, lang: str = "ko") -> dict:
+def force_summary(keyword: str, lang: str = "ko", max_sentences: int = 8) -> tuple[str, str | None]:
     wikipedia.set_lang(lang)
-    try:
-        summary = wikipedia.summary(keyword, sentences=5, auto_suggest=False)
-        page = wikipedia.page(keyword, auto_suggest=False)
-        return _build_result(summary=summary, url=page.url)
-    except wikipedia.exceptions.DisambiguationError as exc:
-        resolved = _resolve_disambiguation(exc.options, lang)
-        if resolved:
-            return resolved
-        return _build_result(message="여전히 모호한 용어입니다. 아래에서 다시 선택해 주세요.", options=exc.options[:5])
-    except wikipedia.exceptions.PageError:
-        # fall back to best-effort search results
-        return _search_fallback(keyword, lang)
-    except Exception as exc:  # pylint: disable=broad-except
-        return _build_result(message=f"요약 중 오류가 발생했습니다: {exc}")
-
-
-def _search_fallback(keyword: str, lang: str) -> dict:
-    search_results = wikipedia.search(keyword)
-    for title in search_results:
+    ordered = _prioritize_options(wikipedia.search(keyword), target=keyword)
+    for title in ordered:
         try:
-            summary = wikipedia.summary(title, sentences=5)
-            page = wikipedia.page(title)
-            return _build_result(summary=summary, url=page.url)
-        except (wikipedia.exceptions.DisambiguationError, wikipedia.exceptions.PageError):
+            summary = wikipedia.summary(title, sentences=max_sentences, auto_suggest=False)
+            link = f"https://{lang}.wikipedia.org/wiki/{quote(title)}"
+            return summary, link
+        except wikipedia.exceptions.DisambiguationError as exc:
+            preferred = _pick_best_candidate(keyword, exc.options)
+            if preferred:
+                try:
+                    summary = wikipedia.summary(preferred, sentences=max_sentences, auto_suggest=False)
+                    link = f"https://{lang}.wikipedia.org/wiki/{quote(preferred)}"
+                    return summary, link
+                except Exception:
+                    continue
             continue
-    return _build_result(message="다른 키워드로 시도해 주세요.")
-
-
-def _build_result(summary: str | None = None, url: str | None = None, options=None, message: str | None = None) -> dict:
-    return {
-        "summary": summary,
-        "url": url,
-        "options": options or [],
-        "message": message,
-    }
-
-
-def _resolve_disambiguation(options: list[str], lang: str, depth: int = 0) -> dict | None:
-    if depth > 3:
-        return None
-    wikipedia.set_lang(lang)
-    for candidate in options:
-        try:
-            summary = wikipedia.summary(candidate, sentences=5)
-            page = wikipedia.page(candidate)
-            return _build_result(summary=summary, url=page.url)
-        except wikipedia.exceptions.DisambiguationError as inner_exc:
-            # keep drilling down with the narrowed options
-            deeper = _resolve_disambiguation(inner_exc.options[:5], lang, depth + 1)
-            if deeper:
-                return deeper
         except wikipedia.exceptions.PageError:
             continue
-    return None
+        except Exception as exc:  # pylint: disable=broad-except
+            return f"알 수 없는 오류 발생: {exc}", None
+    return "항목을 찾을 수 없습니다.", None
+
+
+def original_link(keyword: str, lang: str = "ko") -> str | None:
+    try:
+        wikipedia.set_lang(lang)
+        wikipedia.page(keyword, auto_suggest=False)
+        encoded = quote(keyword)
+        return f"https://{lang}.wikipedia.org/wiki/{encoded}"
+    except Exception:  # pragma: no cover - optional
+        return None
+
+
+def _pick_best_candidate(keyword: str, options: list[str]) -> str | None:
+    prioritized = _prioritize_options(options, target=keyword)
+    return prioritized[0] if prioritized else None
+
+
+def _prioritize_options(options: list[str], target: str | None) -> list[str]:
+    if not options:
+        return []
+    normalized_target = _normalize_title(target or "")
+    hints = PREFERRED_KEYWORDS.get(target or "", [])
+
+    def score(option: str) -> tuple[int, int]:
+        option_norm = _normalize_title(option)
+        if option_norm == normalized_target:
+            return (0, 0)
+        for idx, hint in enumerate(hints):
+            if hint.lower() in option.lower():
+                return (1, idx)
+        if normalized_target and (option_norm.startswith(normalized_target) or normalized_target in option_norm):
+            return (2, 0)
+        if option.endswith("(동음이의어)"):
+            return (3, 0)
+        return (4, 0)
+
+    ranked = sorted(((score(opt), opt) for opt in options), key=lambda pair: (pair[0][0], pair[0][1], pair[1]))
+    return [opt for _, opt in ranked]
+
+
+def _normalize_title(title: str) -> str:
+    return "".join(ch for ch in (title or "").lower() if ch.isalnum())
+
+
+def _dedup_options(options: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for option in options:
+        normalized = _normalize_title(option)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(option)
+    return unique

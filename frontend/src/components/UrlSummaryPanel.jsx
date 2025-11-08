@@ -37,7 +37,7 @@ export default function UrlSummaryPanel({ apiBase }) {
     <article className="panel">
       <header className="panel__head">
         <h2>웹 페이지 요약</h2>
-        <p>AI가 핵심 내용을 bullet 형식으로 요약하며, Perplexity 응답이 없으면 로컬 요약으로 대체합니다.</p>
+        <p>AI가 핵심 내용을 요약합니다.</p>
       </header>
 
       <form className="panel__form" onSubmit={handleSubmit}>
@@ -56,26 +56,41 @@ export default function UrlSummaryPanel({ apiBase }) {
 
       {result && (
         <div className="panel__body">
-          <a className="panel__link" href={result.sourceUrl} target="_blank" rel="noreferrer">
-            {result.sourceTitle}
-          </a>
+          <article className="card">
+            <header className="card__head">
+              <div>
+                <p className="card__eyebrow">요약 결과</p>
+                <h3>{result.sourceTitle}</h3>
+              </div>
+              <a className="panel__link" href={result.sourceUrl} target="_blank" rel="noreferrer">
+                원문 보기
+              </a>
+            </header>
 
-          <pre className="panel__summary">{result.summary}</pre>
+            {result.usedFallback && (
+              <p className="panel__note">
+                Perplexity 호출이 실패하여 기본 요약으로 대체했습니다.
+                {result.fallbackReason && <span className="panel__note-detail">{result.fallbackReason}</span>}
+              </p>
+            )}
 
-          {result.citations?.length ? (
-            <div className="citation-list">
-              <p>출처</p>
-              <ul>
-                {result.citations.map((citation, idx) => (
-                  <li key={`${citation.url}-${idx}`}>
-                    <a href={citation.url || citation.metadata?.url} target="_blank" rel="noreferrer">
-                      {citation.url || citation.metadata?.title || `출처 ${idx + 1}`}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+            <pre className="panel__summary">{result.summary}</pre>
+
+            {result.citations?.length ? (
+              <div className="citation-list">
+                <p>출처</p>
+                <ul>
+                  {result.citations.map((citation, idx) => (
+                    <li key={`${citation.url}-${idx}`}>
+                      <a href={citation.url || citation.metadata?.url} target="_blank" rel="noreferrer">
+                        {citation.url || citation.metadata?.title || `출처 ${idx + 1}`}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </article>
         </div>
       )}
     </article>

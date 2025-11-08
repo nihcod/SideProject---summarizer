@@ -17,7 +17,15 @@ export default function WikipediaPanel({ apiBase }) {
     setError("");
     try {
       const endpoint = force ? "force" : "search";
-      const response = await fetch(`${apiBase}/api/wiki/${endpoint}?term=${encodeURIComponent(actualTerm)}&lang=${lang}`);
+      const url =
+        apiBase +
+        "/api/wiki/" +
+        endpoint +
+        "?term=" +
+        encodeURIComponent(actualTerm) +
+        "&lang=" +
+        lang;
+      const response = await fetch(url);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.message || data.error || "검색에 실패했습니다.");
@@ -35,11 +43,11 @@ export default function WikipediaPanel({ apiBase }) {
     <article className="panel">
       <header className="panel__head">
         <h2>Wikipedia 검색</h2>
-        <p>모호하면 제시된 후보 버튼을 눌러 바로 탐색하고, 더 좁혀가며 원하는 문서를 찾으세요.</p>
+        <p>검색어에 대한 위키피디아 검색 결과를 제공합니다.</p>
       </header>
 
       <div className="panel__form horizontal">
-        <input type="text" placeholder="예) 머신 러닝" value={term} onChange={(event) => setTerm(event.target.value)} />
+        <input type="text" placeholder="검색어를 입력하세요." value={term} onChange={(event) => setTerm(event.target.value)} />
         <select value={lang} onChange={(event) => setLang(event.target.value)}>
           <option value="ko">한국어</option>
           <option value="en">English</option>
@@ -54,31 +62,38 @@ export default function WikipediaPanel({ apiBase }) {
 
       {result && (
         <div className="panel__body">
-          {result.summary ? (
-            <>
-              <pre className="panel__summary">{result.summary}</pre>
+          <article className="card">
+            <header className="card__head">
+              <div>
+                <p className="card__eyebrow">검색 결과</p>
+                <h3>{result.title || term || "검색 결과"}</h3>
+              </div>
               {result.url && (
                 <a className="panel__link" href={result.url} target="_blank" rel="noreferrer">
                   위키 문서 열기
                 </a>
               )}
-            </>
-          ) : (
-            <>
-              {result.message && <p>{result.message}</p>}
-              {result.options?.length ? (
-                <ul className="option-list">
-                  {result.options.map((option) => (
-                    <li key={option}>
-                      <button type="button" className="chip" onClick={() => search(option, true)} disabled={loading}>
-                        {option}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </>
-          )}
+            </header>
+
+            {result.summary ? (
+              <pre className="panel__summary">{result.summary}</pre>
+            ) : (
+              <>
+                <p>{result.message || "결과를 찾지 못했습니다."}</p>
+                {result.options?.length ? (
+                  <ul className="option-list">
+                    {result.options.map((option) => (
+                      <li key={option}>
+                        <button type="button" className="chip" onClick={() => search(option, true)} disabled={loading}>
+                          {option}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </>
+            )}
+          </article>
         </div>
       )}
     </article>

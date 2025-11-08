@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import requests
 
@@ -8,23 +8,28 @@ from .content_fetcher import fetch_webpage
 from .perplexity_client import PerplexityClient
 
 
-def summarize_url(url: str, client: PerplexityClient) -> Tuple[str, Dict]:
+def summarize_url(url: str, client: Optional[PerplexityClient], client_error: Optional[str] = None) -> Tuple[str, Dict]:
     title, text, final_url, _ = fetch_webpage(url)
     if not text:
         raise ValueError("콘텐츠를 추출하지 못했습니다. 다른 URL을 시도해 주세요.")
     used_fallback = False
     fallback_reason = None
     citations = []
-    try:
-        summary, citations = client.summarize_webpage(title, text)
-    except requests.HTTPError as exc:
-        fallback_reason = _describe_http_error(exc)
+    if client is None:
+        fallback_reason = client_error or "Perplexity API를 사용할 수 없습니다."
         summary = local_summary_fallback(title, text)
         used_fallback = True
-    except requests.RequestException as exc:
-        fallback_reason = f"Perplexity API 네트워크 오류: {exc}"
-        summary = local_summary_fallback(title, text)
-        used_fallback = True
+    else:
+        try:
+            summary, citations = client.summarize_webpage(title, text)
+        except requests.HTTPError as exc:
+            fallback_reason = _describe_http_error(exc)
+            summary = local_summary_fallback(title, text)
+            used_fallback = True
+        except requests.RequestException as exc:
+            fallback_reason = f"Perplexity API 네트워크 오류: {exc}"
+            summary = local_summary_fallback(title, text)
+            used_fallback = True
     payload = {
         "summary": summary,
         "citations": citations,

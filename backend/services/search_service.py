@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import List
+from typing import List, Optional, Tuple
 
 import wikipedia
 
@@ -32,17 +32,34 @@ CURATED_RESOURCES = [
 ]
 
 
-def research_by_keywords(keywords: List[str], client: PerplexityClient) -> List[dict]:
+def research_by_keywords(
+    keywords: List[str],
+    client: Optional[PerplexityClient],
+    client_error: Optional[str] = None,
+) -> Tuple[List[dict], dict]:
     query = ", ".join(kw.strip() for kw in keywords if kw.strip())
     if not query:
         raise ValueError("키워드가 비어 있습니다.")
-    try:
-        resources = client.research_resources(query)
-        if resources:
-            return [_attach_source(item, "perplexity") for item in resources]
-    except Exception:  # pylint: disable=broad-except
-        return fallback_resources(query)
-    return fallback_resources(query)
+
+    used_fallback = False
+    fallback_reason = None
+    resources: List[dict] = []
+
+    if client is None:
+        used_fallback = True
+        fallback_reason = client_error or "Perplexity API를 사용할 수 없습니다."
+        resources = fallback_resources(query)
+    else:
+        try:
+            resources = client.research_resources(query)
+            resources = [_attach_source(item, "perplexity") for item in resources]
+        except Exception as exc:  # pylint: disable=broad-except
+            used_fallback = True
+            fallback_reason = f"Perplexity 호출 실패: {exc}"
+            resources = fallback_resources(query)
+
+    meta = {"usedFallback": used_fallback, "fallbackReason": fallback_reason}
+    return resources, meta
 
 
 def fallback_resources(query: str, limit: int = 3) -> List[dict]:
@@ -66,11 +83,18 @@ def fallback_resources(query: str, limit: int = 3) -> List[dict]:
 
     if not entries:
         entries = [
-            {**item, "summary": f"{item['summary']} (검색어: {query})"}
+            {
+                **item,
+                "summary": f"{item['summary']} (검색어: {query})",
+            }
             for item in CURATED_RESOURCES
         ]
 
-    return [_attach_source(item, "wikipedia" if "wikipedia.org" in item.get("url", "") else item.get("via", "fallback")) for item in entries]
+    tagged_entries = [
+        _attach_source(item, "wikipedia" if "wikipedia.org" in (item.get("url") or "") else item.get("via", "curated"))
+        for item in entries
+    ]
+    return tagged_entries
 
 
 def _attach_source(item: dict, source: str) -> dict:
